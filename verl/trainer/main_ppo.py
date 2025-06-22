@@ -19,6 +19,7 @@ import torch
 from verl import DataProto
 from verl.utils.reward_score import gsm8k, math, multiply, countdown, rlla
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
+import os
 
 
 def _select_rm_score_fn(data_source):
@@ -82,7 +83,21 @@ class RewardManager():
             data_source = data_item.non_tensor_batch['data_source']
             compute_score_fn = _select_rm_score_fn(data_source)
 
-            score, fomrat_score, correctness_score, length_score = compute_score_fn(solution_str=sequences_str, ground_truth=ground_truth, step=step)
+            # Prepare kwargs for contribution calculation
+            kwargs = {}
+            if os.getenv("CONTRIBUTION", "0") == "1":
+                # Get step dictionaries from data if available
+                prev_step_dict = data_item.non_tensor_batch.get('prev_step_dict', {})
+                cur_step_dict = data_item.non_tensor_batch.get('cur_step_dict', {})
+                kwargs['prev_step_dict'] = prev_step_dict
+                kwargs['cur_step_dict'] = cur_step_dict
+
+            score, fomrat_score, correctness_score, length_score = compute_score_fn(
+                solution_str=sequences_str, 
+                ground_truth=ground_truth, 
+                step=step,
+                **kwargs
+            )
             reward_tensor[i, valid_response_length - 1] = score
             format_tensor[i, valid_response_length - 1] = fomrat_score
             correctness_tensor[i, valid_response_length - 1] = correctness_score

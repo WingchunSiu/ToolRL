@@ -1,13 +1,14 @@
 #!/bin/bash
 
 #SBATCH --job-name=grpo-qwen-training  # Give your job a name
+#SBATCH --account=beaa-delta-gpu      # Specify your account (REQUIRED for Delta)
 #SBATCH --nodes=1                      # Request one node
 #SBATCH --ntasks-per-node=1            # Request one task per node
 #SBATCH --cpus-per-task=8              # Adjust as needed for data processing
 #SBATCH --mem=64G                      # Adjust as needed
 #SBATCH --gres=gpu:2                   # Request 2 GPUs
 #SBATCH --time=04:00:00                # Set a time limit for the job (e.g., 4 hours)
-#SBATCH --partition=gpuA100            # Or the specific GPU partition you have access to on Delta
+#SBATCH --partition=gpuA100x4          # Or the specific GPU partition you have access to on Delta
 #SBATCH --output=grpo_%j.out           # Standard output log
 #SBATCH --error=grpo_%j.err            # Standard error log
 

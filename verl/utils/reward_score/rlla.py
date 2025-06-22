@@ -15,7 +15,11 @@
 import re
 import json
 import os
+import numpy as np
 from collections import Counter
+from ..contribution import (
+    contrib_binary, contrib_value_delta, contrib_info_gain
+)
 
 
 def match_score(list1, list2):
@@ -254,17 +258,16 @@ def customize_correctness_reward_tool(completions, answer, step, max_possible_re
     return rewards
 
 
-def compute_score(solution_str, ground_truth, step=0):
-    """The scoring function for GSM8k.
+def compute_score(solution_str, ground_truth, step=0, **kwargs):
+    """The scoring function for RLLA.
 
     Reference: Trung, Luong, et al. "Reft: Reasoning with reinforced fine-tuning." Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers). 2024.
 
     Args:
         solution_str: the solution text
         ground_truth: the ground truth
-        method: the method to extract the solution, choices are 'strict' and 'flexible'
-        format_score: the score for the format
-        score: the score for the correct answer
+        step: current training step
+        **kwargs: may contain prev_step_dict and cur_step_dict for contribution calculation
     """
     exp_name = str(os.getenv("EXPERIMENT_NAME", ""))
     if "llama" in exp_name:
@@ -301,6 +304,46 @@ def compute_score(solution_str, ground_truth, step=0):
         length_score = 0
     
     score = fomrat_score + correctness_score + length_score
+    
+    # ---------- Contribution reward ----------
+    if os.getenv("CONTRIBUTION", "0") == "1":
+        contrib_type = os.getenv("CONTRIB_TYPE", "C0").upper()
+        beta = float(os.getenv("BETA", "0.05"))
+        
+        # Get step dictionaries from kwargs
+        prev_step_dict = kwargs.get("prev_step_dict", {})
+        cur_step_dict = kwargs.get("cur_step_dict", {})
+        
+        if contrib_type == "C0":
+            # C-0: Binary contribution based on blackboard changes
+            prev_bb = prev_step_dict.get("bb_hash", "{}")
+            cur_bb = cur_step_dict.get("bb_hash", "{}")
+            R_contrib = contrib_binary(prev_bb, cur_bb)
+        elif contrib_type == "C1":
+            # C-1: Value-delta contribution based on critic value changes
+            prev_v = prev_step_dict.get("value_est", 0.0)
+            cur_v = cur_step_dict.get("value_est", 0.0)
+            
+            # Get task information for enhanced C-1 calculation
+            task_info = cur_step_dict.get("task_info", {})
+            task_complexity = task_info.get("complexity", 1.0)
+            
+            R_contrib = contrib_value_delta(
+                prev_v=prev_v, 
+                cur_v=cur_v, 
+                step=step,
+                task_complexity=task_complexity,
+                task_info=task_info
+            )
+        else:
+            R_contrib = 0.0
+            
+        score += beta * R_contrib
+        
+        print(f"\n======= Contribution Reward ({contrib_type}) =======")
+        print(f"Contribution reward: {R_contrib}")
+        print(f"Beta: {beta}")
+        print(f"Total contribution: {beta * R_contrib}")
     
     return score, fomrat_score, correctness_score, length_score
     

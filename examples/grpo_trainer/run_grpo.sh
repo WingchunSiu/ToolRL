@@ -1,3 +1,8 @@
+# --- contribution toggle ---
+export CONTRIBUTION=1      # 0 to disable
+export CONTRIB_TYPE=C0     # C0 / C1 / C2
+export BETA=0.05
+
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files=$DATA_DIR/train.parquet \
