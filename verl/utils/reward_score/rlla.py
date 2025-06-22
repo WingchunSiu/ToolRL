@@ -254,25 +254,137 @@ def customize_correctness_reward_tool(completions, answer, step, max_possible_re
     return rewards
 
 
-def compute_score(solution_str, ground_truth, step=0):
-    """The scoring function for GSM8k.
+def compute_contribution_reward(response, ground_truth, step=0):
+    """
+    Compute contribution reward that measures how much each action advances toward goal completion.
+    
+    This implements the contribution-enhanced reward design:
+    R_contribution measures the degree to which each action reduces the distance to solving the overall task.
+    
+    Args:
+        response: The model's response text
+        ground_truth: The target ground truth response
+        step: Current training step (for adaptive weighting)
+    
+    Returns:
+        contribution_score: Float reward indicating task advancement
+    """
+    contribution_score = 0.0
+    
+    # Base contribution weight (beta parameter)
+    beta = float(os.getenv("CONTRIBUTION_BETA", "0.5"))  # Default beta = 0.5
+    
+    # Progressive step analysis - reward intermediate progress
+    progress_indicators = []
+    
+    # 1. Thinking phase contribution
+    if "<think>" in response and "</think>" in response:
+        think_content = response.split("<think>")[1].split("</think>")[0].strip()
+        
+        # Reward reasoning depth and relevance
+        reasoning_depth = len(think_content.split('.'))  # Number of reasoning steps
+        progress_indicators.append(min(reasoning_depth / 10.0, 1.0))  # Normalize to [0,1]
+        
+        # Check if thinking mentions key concepts from ground truth
+        gt_keywords = set(re.findall(r'\b\w+\b', ground_truth.lower()))
+        think_keywords = set(re.findall(r'\b\w+\b', think_content.lower()))
+        keyword_overlap = len(gt_keywords & think_keywords) / max(len(gt_keywords), 1)
+        progress_indicators.append(keyword_overlap)
+    
+    # 2. Tool selection contribution  
+    if "<tool_call>" in ground_truth:
+        gt_tools = []
+        try:
+            gt_tool_section = ground_truth.split("<tool_call>")[1].split("</tool_call>")[0].strip()
+            gt_tools = [json.loads(tool)["name"] for tool in gt_tool_section.split("\n")]
+        except:
+            pass
+        
+        if "<tool_call>" in response:
+            try:
+                pred_tool_section = response.split("<tool_call>")[1].split("</tool_call>")[0].strip()
+                pred_tools = [json.loads(tool)["name"] for tool in pred_tool_section.split("\n")]
+                
+                # Reward correct tool selection even if parameters are wrong
+                tool_selection_score = len(set(gt_tools) & set(pred_tools)) / max(len(gt_tools), 1)
+                progress_indicators.append(tool_selection_score)
+            except:
+                pass
+    
+    # 3. Response structure contribution
+    expected_sections = []
+    if "<think>" in ground_truth:
+        expected_sections.append("think")
+    if "<tool_call>" in ground_truth:
+        expected_sections.append("tool_call") 
+    if "<response>" in ground_truth:
+        expected_sections.append("response")
+    
+    completed_sections = []
+    if "<think>" in response and "</think>" in response:
+        completed_sections.append("think")
+    if "<tool_call>" in response and "</tool_call>" in response:
+        completed_sections.append("tool_call")
+    if "<response>" in response and "</response>" in response:
+        completed_sections.append("response")
+    
+    structure_progress = len(completed_sections) / max(len(expected_sections), 1)
+    progress_indicators.append(structure_progress)
+    
+    # 4. Adaptive contribution based on training step
+    # Early training: focus more on structure and format
+    # Later training: focus more on correctness and reasoning
+    step_factor = min(step / 100.0, 1.0)  # Ramp up over 100 steps
+    
+    if progress_indicators:
+        # Weighted average of progress indicators
+        early_weight = 1.0 - step_factor  # Higher weight early in training
+        late_weight = step_factor         # Higher weight later in training
+        
+        structure_score = progress_indicators[-1]  # Structure progress
+        reasoning_score = progress_indicators[0] if progress_indicators else 0.0  # Reasoning depth
+        
+        contribution_score = (early_weight * structure_score + late_weight * reasoning_score)
+    
+    # Scale by beta parameter
+    final_contribution = beta * contribution_score
+    
+    print(f"\n======= Contribution Reward =======")
+    print(f"Beta (contribution weight): {beta}")
+    print(f"Progress indicators: {progress_indicators}")
+    print(f"Step factor: {step_factor:.3f}")
+    print(f"Raw contribution score: {contribution_score:.3f}")
+    print(f"Final contribution reward: {final_contribution:.3f}")
+    
+    return final_contribution
 
+
+def compute_score(solution_str, ground_truth, step=0):
+    """The scoring function for RLLA with contribution-enhanced reward design.
+    
+    Implements: R_final = R_format + R_correct + β * R_contribution
+    
     Reference: Trung, Luong, et al. "Reft: Reasoning with reinforced fine-tuning." Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers). 2024.
 
     Args:
         solution_str: the solution text
         ground_truth: the ground truth
-        method: the method to extract the solution, choices are 'strict' and 'flexible'
-        format_score: the score for the format
-        score: the score for the correct answer
+        step: current training step
     """
     exp_name = str(os.getenv("EXPERIMENT_NAME", ""))
-    if "llama" in exp_name:
+    if "llama" in exp_name.lower():
         predict_str = solution_str.split("<|start_header_id|>assistant<|end_header_id|>")[-1].split("<|eot_id|>")[0].strip()
-    elif "qwen" in exp_name:
+    elif "qwen" in exp_name.lower():
         predict_str = solution_str.split("<|im_start|>assistant")[-1].split("<|im_end|>")[0].strip()
     else:
-        raise NotImplementedError(f"Unknown model name: {exp_name}")
+        # Default to Qwen format for unknown/empty experiment names
+        if "<|im_start|>assistant" in solution_str:
+            predict_str = solution_str.split("<|im_start|>assistant")[-1].split("<|im_end|>")[0].strip()
+        elif "<|start_header_id|>assistant<|end_header_id|>" in solution_str:
+            predict_str = solution_str.split("<|start_header_id|>assistant<|end_header_id|>")[-1].split("<|eot_id|>")[0].strip()
+        else:
+            # Fallback: use the entire solution_str
+            predict_str = solution_str
     
     if str(os.getenv("CORRECTMAX1", 0)) == "1":
         print("CORRECTMAX1 is set to 1, so max score is set to 1")
@@ -300,7 +412,23 @@ def compute_score(solution_str, ground_truth, step=0):
     else:
         length_score = 0
     
-    score = fomrat_score + correctness_score + length_score
+    # Contribution-Enhanced Reward Design
+    if str(os.getenv("ENABLE_CONTRIBUTION", "0")) == "1":
+        print("ENABLE_CONTRIBUTION is set to 1, so contribution reward is enabled!")
+        contribution_score = compute_contribution_reward(predict_str, ground_truth, step)
+    else:
+        contribution_score = 0
+    
+    # Final reward: R_final = R_format + R_correct + [R_length] + β * R_contribution
+    score = fomrat_score + correctness_score + length_score + contribution_score
+    
+    print(f"\n======= Final Reward Breakdown =======")
+    print(f"Format score: {fomrat_score:.3f}")
+    print(f"Correctness score: {correctness_score:.3f}")
+    print(f"Length score: {length_score:.3f}")
+    print(f"Contribution score: {contribution_score:.3f}")
+    print(f"Final total score: {score:.3f}")
     
     return score, fomrat_score, correctness_score, length_score
+    
     

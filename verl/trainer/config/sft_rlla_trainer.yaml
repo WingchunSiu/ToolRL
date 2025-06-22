@@ -1,0 +1,41 @@
+data:
+  train_batch_size: 64  # Smaller batch size for small dataset
+  micro_batch_size: 8   # Smaller micro batch
+  train_files: /u/siu1/ToolRL/dataset/rlla_sft_processed/train.parquet
+  val_files: /u/siu1/ToolRL/dataset/rlla_sft_processed/test.parquet
+  prompt_key: prompt  # contains the preprocessed prompt string
+  prompt_dict_keys: []  # No nested dict access needed
+  response_key: response  # contains the target response string
+  response_dict_keys: []  # No nested dict access needed
+  max_length: 1024
+  truncation: error
+  balance_dp_token: False
+  chat_template: null
+
+model:
+  partial_pretrain: Qwen/Qwen2.5-1.5B-Instruct
+  fsdp_config:
+    wrap_policy:
+      min_num_params: 0
+    cpu_offload: False
+    offload_params: False
+  external_lib: null
+  enable_gradient_checkpointing: true  # Enable for memory efficiency
+  trust_remote_code: true  # Required for Qwen models
+
+optim:
+  lr: 2e-5  # Slightly higher learning rate for SFT
+  betas: [0.9, 0.95]
+  weight_decay: 0.01
+  warmup_steps_ratio: 0.1
+  clip_grad: 1.0
+
+trainer:
+  default_local_dir: /u/siu1/ToolRL/checkpoints/sft_rlla
+  default_hdfs_dir: null  # Set to null for local storage
+  resume_path: null
+  project_name: rlla-sft
+  experiment_name: qwen2.5-1.5b-instruct-rlla4k
+  total_epochs: 2  # 2 epochs for faster training with small dataset
+  logger: ['console']
+  seed: 42 
